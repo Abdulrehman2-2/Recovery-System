@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import { useTheme } from '../context/ThemeContext';
 import { useNotifications } from '../context/NotificationContext';
-import { formatDate } from '../utils/formatters';
+import { formatDate, pluralize } from '../utils/formatters';
 
 export function Navbar() {
   const { theme, toggleTheme } = useTheme();
@@ -138,7 +138,7 @@ export function Navbar() {
               >
                 <Bell className="w-5 h-5" />
                 {unreadCount > 0 && (
-                  <span className="absolute top-1.5 right-1.5 flex h-4 min-w-[16px] px-1 items-center justify-center rounded-full bg-red-600 text-[10px] font-bold text-white shadow-sm ring-2 ring-white dark:ring-navy-900">
+                  <span className="absolute top-1.5 right-1.5 flex h-4 min-w-[16px] px-1 items-center justify-center rounded-full bg-red-600 text-[10px] font-bold text-white shadow-sm ring-2 ring-white dark:ring-navy-900 animate-pulse">
                     {unreadCount > 99 ? '99+' : unreadCount}
                   </span>
                 )}
@@ -155,7 +155,7 @@ export function Navbar() {
                         Notifications
                       </h4>
                       <span className="px-2 py-0.5 text-xs font-semibold rounded-full bg-slate-200 dark:bg-navy-700 text-slate-700 dark:text-slate-300">
-                        {unreadCount}
+                        {pluralize(unreadCount, 'Item')}
                       </span>
                     </div>
 
@@ -179,7 +179,7 @@ export function Navbar() {
                           All caught up!
                         </p>
                         <p className="text-xs text-slate-400 mt-0.5">
-                          No open flags or pending payment proofs.
+                          No open flags or pending payment proofs at this time.
                         </p>
                       </div>
                     ) : (
@@ -246,7 +246,7 @@ export function Navbar() {
         </div>
       </div>
 
-      {/* Mobile navigation row */}
+      {/* Mobile Navigation Row */}
       <div className="md:hidden flex items-center justify-around border-t border-slate-200 dark:border-navy-700 py-2 bg-slate-50 dark:bg-navy-900">
         <NavLink
           to="/"

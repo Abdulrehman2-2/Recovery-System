@@ -15,7 +15,15 @@ import { Badge } from '../components/Badge';
 import { LoadingSpinner } from '../components/LoadingSpinner';
 import { ErrorMessage } from '../components/ErrorMessage';
 import { EmptyState } from '../components/EmptyState';
-import { formatCurrency, formatDate, calculateDaysOverdue } from '../utils/formatters';
+import {
+  formatCurrency,
+  formatDate,
+  calculateDaysOverdue,
+  formatOverdueDays,
+  formatLastContacted,
+  pluralize,
+  isPromiseBroken,
+} from '../utils/formatters';
 
 export function Customers() {
   const [customers, setCustomers] = useState([]);
@@ -25,11 +33,11 @@ export function Customers() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  // Filters and Sorting
+  // Search, Filters & Sorting
   const [searchQuery, setSearchQuery] = useState('');
   const [priorityFilter, setPriorityFilter] = useState('all');
   const [flagFilter, setFlagFilter] = useState('all');
-  const [sortBy, setSortBy] = useState('outstanding_desc'); // outstanding_desc, days_desc, name_asc, broken_desc
+  const [sortBy, setSortBy] = useState('outstanding_desc');
 
   const navigate = useNavigate();
 
@@ -46,12 +54,12 @@ export function Customers() {
 
       if (custErr) throw custErr;
 
-      // 2. Fetch Invoices (unpaid/overdue to compute earliest due_date)
+      // 2. Fetch Invoices (to calculate earliest due_date for unpaid ones)
       const { data: invList, error: invErr } = await supabase
         .from('invoices')
         .select('customer_id, due_date, status, amount');
 
-      if (invErr) console.warn('Invoices fetch error:', invErr.message);
+      if (invErr) console.warn('Invoices fetch notice:', invErr.message);
 
       // 3. Fetch Payment Promises
       const { data: promList, error: promErr } = await supabase
@@ -59,7 +67,7 @@ export function Customers() {
         .select('customer_id, amount, promised_date, status')
         .order('promised_date', { ascending: true });
 
-      if (promErr) console.warn('Promises fetch error:', promErr.message);
+      if (promErr) console.warn('Promises fetch notice:', promErr.message);
 
       // 4. Fetch Open Flags
       const { data: flagList, error: flagErr } = await supabase
@@ -67,15 +75,15 @@ export function Customers() {
         .select('id, customer_id, reason, status')
         .eq('status', 'open');
 
-      if (flagErr) console.warn('Flags fetch error:', flagErr.message);
+      if (flagErr) console.warn('Flags fetch notice:', flagErr.message);
 
       setCustomers(custList || []);
       setInvoices(invList || []);
       setPromises(promList || []);
       setFlags(flagList || []);
     } catch (err) {
-      console.error('Error fetching customers page data:', err);
-      setError(err.message || 'Failed to load customers');
+      console.error('Error loading customers:', err);
+      setError(err.message || 'Failed to retrieve customer accounts.');
     } finally {
       setLoading(false);
     }
@@ -85,7 +93,7 @@ export function Customers() {
     fetchCustomersData();
   }, [fetchCustomersData]);
 
-  // Aggregate customer calculations
+  // Aggregate Customer Calculations
   const customerDetailsMap = useMemo(() => {
     const map = {};
 
@@ -93,7 +101,6 @@ export function Customers() {
     const invMap = {};
     (invoices || []).forEach((inv) => {
       if (!invMap[inv.customer_id]) invMap[inv.customer_id] = [];
-      // Consider unpaid or overdue invoices
       if (inv.status !== 'paid') {
         invMap[inv.customer_id].push(inv);
       }
@@ -118,7 +125,7 @@ export function Customers() {
       const custPromises = promMap[cust.id] || [];
       const custFlags = flagMap[cust.id] || [];
 
-      // Calculate Earliest Due Date for unpaid invoices
+      // Calculate Earliest Unpaid Due Date
       let earliestDueDate = null;
       custInvoices.forEach((inv) => {
         if (inv.due_date) {
@@ -130,17 +137,17 @@ export function Customers() {
 
       const daysOverdue = earliestDueDate ? calculateDaysOverdue(earliestDueDate) : 0;
 
-      // Open promise: status = 'pending', earliest promised_date
+      // Open Promise: status = 'pending', earliest promised_date that is not in the past
       const openPromises = custPromises
-        .filter((p) => p.status === 'pending' && p.promised_date)
+        .filter((p) => p.status === 'pending' && p.promised_date && !isPromiseBroken(p))
         .sort((a, b) => new Date(a.promised_date) - new Date(b.promised_date));
 
       const openPromise = openPromises.length > 0 ? openPromises[0] : null;
 
-      // Broken promises count: status = 'missed'
-      const brokenCount = custPromises.filter((p) => p.status === 'missed').length;
+      // Broken Promises Count (status = 'missed' OR pending in the past)
+      const brokenCount = custPromises.filter(isPromiseBroken).length;
 
-      // Has open flags
+      // Has Open Flags
       const hasOpenFlags = custFlags.length > 0;
 
       map[cust.id] = {
@@ -156,11 +163,11 @@ export function Customers() {
     return map;
   }, [customers, invoices, promises, flags]);
 
-  // Process Search, Filters, and Sorting
+  // Apply Search, Filters, and Sorting
   const filteredCustomers = useMemo(() => {
     return customers
       .filter((cust) => {
-        // Search
+        // Search filter
         const q = searchQuery.toLowerCase().trim();
         const matchesSearch =
           !q ||
@@ -176,7 +183,7 @@ export function Customers() {
           return false;
         }
 
-        // Flag filter
+        // Flag / Risk filter
         const details = customerDetailsMap[cust.id] || {};
         if (flagFilter === 'flagged' && !details.hasOpenFlags) return false;
         if (flagFilter === 'broken' && details.brokenCount === 0) return false;
@@ -215,7 +222,7 @@ export function Customers() {
             Accounts & Customers
           </h1>
           <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
-            Search, filter, and track recovery status across all client accounts.
+            Search, filter, and track payment commitments across all recovery accounts.
           </p>
         </div>
 
@@ -264,7 +271,7 @@ export function Customers() {
           </select>
         </div>
 
-        {/* Status / Flag Filter */}
+        {/* Risk / Flag Filter */}
         <div className="flex items-center gap-2">
           <label htmlFor="risk-filter" className="text-xs font-semibold text-slate-500 dark:text-slate-400 whitespace-nowrap">
             Risk:
@@ -296,7 +303,7 @@ export function Customers() {
             <option value="outstanding_asc">Lowest Outstanding</option>
             <option value="days_desc">Most Days Overdue</option>
             <option value="broken_desc">Most Broken Promises</option>
-            <option value="name_asc">Shop Name (A-Z)</option>
+            <option value="name_asc">Shop Name (A–Z)</option>
           </select>
         </div>
       </div>
@@ -305,16 +312,16 @@ export function Customers() {
       <div className="bg-white dark:bg-navy-800 border border-slate-200 dark:border-navy-700 rounded-lg shadow-sm overflow-hidden">
         {loading ? (
           <div className="p-8">
-            <LoadingSpinner message="Fetching customers and calculating overdue metrics..." />
+            <LoadingSpinner message="Calculating customer overdue metrics and balances..." />
           </div>
         ) : filteredCustomers.length === 0 ? (
           <div className="p-8">
             <EmptyState
-              title={searchQuery ? 'No matching customers found' : 'No customers in database'}
+              title={searchQuery ? 'No matching customer accounts' : 'No customers registered'}
               description={
                 searchQuery
-                  ? `No customer accounts match your search query "${searchQuery}". Try clearing filters.`
-                  : 'Add customer records to your Supabase database to start tracking receivables.'
+                  ? `No customer accounts match your search query "${searchQuery}". Try resetting filters.`
+                  : 'Add customer accounts to your database to start managing receivables and promises.'
               }
               icon={Store}
               action={
@@ -327,14 +334,14 @@ export function Customers() {
                     }}
                     className="px-3 py-1.5 text-xs font-semibold text-teal dark:text-mint border border-teal dark:border-mint rounded hover:bg-teal-50 dark:hover:bg-navy-700 transition"
                   >
-                    Clear Search Filters
+                    Reset Filters
                   </button>
                 ) : (
                   <Link
                     to="/"
                     className="px-3 py-1.5 text-xs font-semibold text-teal dark:text-mint border border-teal dark:border-mint rounded hover:bg-teal-50 dark:hover:bg-navy-700 transition"
                   >
-                    Back to Dashboard
+                    Go to Dashboard
                   </Link>
                 )
               }
@@ -364,7 +371,7 @@ export function Customers() {
                     Broken Promises
                   </th>
                   <th scope="col" className="px-4 py-3.5 text-center">
-                    Alerts
+                    Flags
                   </th>
                   <th scope="col" className="px-4 py-3.5 text-right">
                     Action
@@ -393,9 +400,7 @@ export function Customers() {
                             <div className="font-bold text-slate-900 dark:text-white text-sm flex items-center gap-1.5">
                               {cust.shop_name || 'Unnamed Shop'}
                               {cust.priority && (
-                                <Badge variant={cust.priority} className="text-[10px] py-0 px-1.5">
-                                  {cust.priority}
-                                </Badge>
+                                <Badge variant={cust.priority} className="text-[10px] py-0 px-1.5" />
                               )}
                             </div>
                             <div className="text-xs text-slate-500 dark:text-slate-400 flex items-center gap-2 mt-0.5">
@@ -418,7 +423,7 @@ export function Customers() {
                       <td className="px-4 py-4 text-slate-600 dark:text-slate-300 whitespace-nowrap">
                         <div className="flex items-center gap-1.5">
                           <Clock className="w-3.5 h-3.5 text-slate-400" />
-                          {formatDate(cust.last_contacted_at)}
+                          {formatLastContacted(cust.last_contacted_at)}
                         </div>
                       </td>
 
@@ -428,18 +433,18 @@ export function Customers() {
                           <span
                             className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-xs font-bold ${
                               details.daysOverdue > 30
-                                ? 'bg-red-100 text-red-800 border border-red-300 dark:bg-red-950 dark:text-red-300 dark:border-red-800'
-                                : 'bg-amber-100 text-amber-900 border border-amber-300 dark:bg-amber-950 dark:text-amber-300 dark:border-amber-800'
+                                ? 'bg-red-100 text-red-900 border border-red-300 dark:bg-red-950 dark:text-red-300 dark:border-red-800'
+                                : 'bg-red-100 text-red-800 border border-red-300 dark:bg-red-950 dark:text-red-300 dark:border-red-800'
                             }`}
                           >
-                            {details.daysOverdue} days
+                            {formatOverdueDays(details.daysOverdue)}
                           </span>
                         ) : (
-                          <span className="text-slate-400 text-xs font-medium">On Track</span>
+                          <span className="text-slate-400 text-xs font-medium">Not yet due</span>
                         )}
                       </td>
 
-                      {/* Open Promise (Amount and Date from payment_promises where status = 'pending') */}
+                      {/* Open Promise */}
                       <td className="px-5 py-4">
                         {details.openPromise ? (
                           <div className="space-y-0.5">
@@ -452,7 +457,7 @@ export function Customers() {
                             </div>
                           </div>
                         ) : (
-                          <span className="text-slate-400 text-xs italic">No open promise</span>
+                          <span className="text-slate-400 text-xs italic">None</span>
                         )}
                       </td>
 
@@ -460,7 +465,7 @@ export function Customers() {
                       <td className="px-4 py-4 text-center">
                         {details.brokenCount > 0 ? (
                           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold bg-rose-100 text-rose-800 border border-rose-200 dark:bg-rose-950 dark:text-rose-300 dark:border-rose-800">
-                            {details.brokenCount} missed
+                            {pluralize(details.brokenCount, 'missed promise', 'missed promises')}
                           </span>
                         ) : (
                           <span className="text-slate-400 text-xs">0</span>
@@ -488,7 +493,7 @@ export function Customers() {
                           onClick={(e) => e.stopPropagation()}
                           className="inline-flex items-center gap-1 text-xs font-bold text-teal hover:text-teal-700 dark:text-mint dark:hover:text-mint/80 bg-teal-50 dark:bg-navy-700 px-2.5 py-1 rounded border border-teal-200 dark:border-navy-600 transition"
                         >
-                          View
+                          View Account
                           <ChevronRight className="w-3.5 h-3.5" />
                         </Link>
                       </td>
@@ -500,14 +505,14 @@ export function Customers() {
           </div>
         )}
 
-        {/* Table footer with counts */}
+        {/* Table Footer with Correct Pluralization */}
         {!loading && filteredCustomers.length > 0 && (
           <div className="px-6 py-3 bg-slate-50 dark:bg-navy-900 border-t border-slate-200 dark:border-navy-700 flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
             <span>
               Showing <strong className="text-slate-800 dark:text-slate-200">{filteredCustomers.length}</strong> of{' '}
-              <strong className="text-slate-800 dark:text-slate-200">{customers.length}</strong> accounts
+              <strong className="text-slate-800 dark:text-slate-200">{pluralize(customers.length, 'account')}</strong>
             </span>
-            <span>Click any customer row to view detailed recovery history</span>
+            <span>Click any customer row to view account details</span>
           </div>
         )}
       </div>

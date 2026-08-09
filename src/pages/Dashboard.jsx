@@ -19,7 +19,12 @@ import { Badge } from '../components/Badge';
 import { LoadingSpinner } from '../components/LoadingSpinner';
 import { ErrorMessage } from '../components/ErrorMessage';
 import { EmptyState } from '../components/EmptyState';
-import { formatCurrency, formatTime } from '../utils/formatters';
+import {
+  formatCurrency,
+  formatTime,
+  getTodayMidnight,
+  pluralize,
+} from '../utils/formatters';
 import { seedSampleData } from '../utils/seedData';
 
 export function Dashboard() {
@@ -42,21 +47,23 @@ export function Dashboard() {
       setLoading(true);
       setError(null);
 
-      // Current Day Range (00:00:00 to 23:59:59 UTC/Local)
-      const now = new Date();
-      const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0).toISOString();
-      const todayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999).toISOString();
+      // Local today date bounds (00:00:00 to 23:59:59.999 local time converted to ISO)
+      const todayStartObj = getTodayMidnight();
+      const todayEndObj = new Date(todayStartObj.getTime() + 86400000 - 1);
 
-      // 1. Fetch Conversations / Calls made today
+      const todayStart = todayStartObj.toISOString();
+      const todayEnd = todayEndObj.toISOString();
+
+      // 1. Total calls made today
       const { count: callsTodayCount, error: callsErr } = await supabase
         .from('conversations')
         .select('*', { count: 'exact', head: true })
         .gte('started_at', todayStart)
         .lte('started_at', todayEnd);
 
-      if (callsErr) console.warn('Calls error:', callsErr.message);
+      if (callsErr) console.warn('Calls fetch notice:', callsErr.message);
 
-      // 2. Fetch Payments received today (status = 'verified' and verified_at is today)
+      // 2. Total payments received today (status = 'verified' and verified_at is today)
       const { data: verifiedPayments, error: paymentsErr } = await supabase
         .from('payments')
         .select(`
@@ -73,9 +80,9 @@ export function Dashboard() {
         .lte('verified_at', todayEnd)
         .order('verified_at', { ascending: false });
 
-      if (paymentsErr) console.warn('Payments error:', paymentsErr.message);
+      if (paymentsErr) console.warn('Payments fetch notice:', paymentsErr.message);
 
-      // Fetch customer shop names for these payments
+      // Fetch customer names for these payments
       const paymentCustomerIds = (verifiedPayments || [])
         .map((p) => p.customer_id)
         .filter(Boolean);
@@ -94,7 +101,10 @@ export function Dashboard() {
 
         paymentsWithCustomer = (verifiedPayments || []).map((p) => ({
           ...p,
-          customer: custMap[p.customer_id] || { shop_name: 'Customer #' + p.customer_id, owner_name: '—' },
+          customer: custMap[p.customer_id] || {
+            shop_name: `Customer #${p.customer_id}`,
+            owner_name: '—',
+          },
         }));
       }
 
@@ -103,7 +113,7 @@ export function Dashboard() {
         0
       );
 
-      // 3. Fetch Total Outstanding across all customers
+      // 3. Total outstanding across all customers
       const { data: allCustomers, count: totalCustCount, error: custErr } = await supabase
         .from('customers')
         .select('id, total_outstanding', { count: 'exact' });
@@ -116,13 +126,13 @@ export function Dashboard() {
       );
       setCustomersCount(totalCustCount || 0);
 
-      // 4. Fetch Count of Open Flags
+      // 4. Count of open flags
       const { count: openFlagsCount, error: flagsErr } = await supabase
         .from('flags')
         .select('*', { count: 'exact', head: true })
         .eq('status', 'open');
 
-      if (flagsErr) console.warn('Flags count error:', flagsErr.message);
+      if (flagsErr) console.warn('Flags count notice:', flagsErr.message);
 
       // Update State
       setStats({
@@ -136,7 +146,7 @@ export function Dashboard() {
       setPaymentsToday(paymentsWithCustomer);
     } catch (err) {
       console.error('Dashboard load error:', err);
-      setError(err.message || 'Failed to retrieve dashboard analytics');
+      setError(err.message || 'Failed to retrieve recovery dashboard data');
     } finally {
       setLoading(false);
     }
@@ -168,7 +178,7 @@ export function Dashboard() {
             Recovery Dashboard
           </h1>
           <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
-            Real-time daily activity, collected dues, and pending recoveries summary.
+            Real-time daily recovery metrics, collections, and pending dues summary.
           </p>
         </div>
 
@@ -194,17 +204,17 @@ export function Dashboard() {
 
       {error && <ErrorMessage message={error} onRetry={fetchDashboardData} />}
 
-      {/* Zero Data Banner (Helper to populate realistic demo data if fresh DB) */}
+      {/* Demo Data Helper for Initial Setup */}
       {customersCount === 0 && !loading && (
         <div className="rounded-lg border-2 border-dashed border-teal-300 dark:border-teal-800 bg-teal-50/50 dark:bg-navy-800 p-6 flex flex-col sm:flex-row items-center justify-between gap-4">
           <div className="flex items-start gap-3">
             <Sparkles className="w-6 h-6 text-teal shrink-0 mt-0.5" />
             <div>
               <h3 className="text-sm font-bold text-slate-900 dark:text-white">
-                Supabase Tables Connected & Ready
+                Supabase Connected — No Records Yet
               </h3>
               <p className="text-xs text-slate-600 dark:text-slate-300 mt-0.5">
-                The database is connected with 0 records. You can load sample customers, unpaid invoices, conversation logs, and pending verification proofs to explore immediately.
+                Populate realistic customer accounts, invoices, calls, promises, and payment proofs with a single click.
               </p>
             </div>
           </div>
@@ -214,18 +224,18 @@ export function Dashboard() {
             className="inline-flex items-center gap-2 px-4 py-2 text-xs font-bold text-white bg-teal hover:bg-teal-600 rounded-md shrink-0 shadow-sm transition disabled:opacity-50"
           >
             <Sparkles className="w-3.5 h-3.5" />
-            {seeding ? 'Populating Data...' : 'Populate Sample Data'}
+            {seeding ? 'Populating Records...' : 'Populate Sample Data'}
           </button>
         </div>
       )}
 
-      {/* Top Stat Cards */}
+      {/* 4 Stat Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
         {/* 1. Total Calls Made Today */}
         <StatCard
           title="Calls Made Today"
           value={stats.callsToday}
-          subtitle="Customer follow-up calls"
+          subtitle={pluralize(stats.callsToday, 'call conducted today', 'calls conducted today')}
           icon={PhoneCall}
           color="blue"
         />
@@ -234,7 +244,7 @@ export function Dashboard() {
         <StatCard
           title="Payments Received Today"
           value={formatCurrency(stats.paymentsSumToday)}
-          subtitle={`${stats.paymentsCountToday} verified ${stats.paymentsCountToday === 1 ? 'transaction' : 'transactions'}`}
+          subtitle={pluralize(stats.paymentsCountToday, 'verified payment')}
           icon={CheckCircle2}
           color="emerald"
         />
@@ -243,7 +253,7 @@ export function Dashboard() {
         <StatCard
           title="Total Outstanding"
           value={formatCurrency(stats.totalOutstanding)}
-          subtitle={`Across ${customersCount} total accounts`}
+          subtitle={`Across ${pluralize(customersCount, 'customer account')}`}
           icon={DollarSign}
           color="navy"
           onClick={() => navigate('/customers')}
@@ -253,10 +263,14 @@ export function Dashboard() {
         <StatCard
           title="Open Urgent Flags"
           value={stats.openFlagsCount}
-          subtitle={stats.openFlagsCount > 0 ? 'Requires immediate action' : 'No open disputes'}
+          subtitle={
+            stats.openFlagsCount > 0
+              ? `${pluralize(stats.openFlagsCount, 'urgent account')} flagged`
+              : 'No unresolved flags'
+          }
           icon={AlertTriangle}
           color={stats.openFlagsCount > 0 ? 'rose' : 'teal'}
-          badge={stats.openFlagsCount > 0 ? 'Urgent' : 'Clear'}
+          badge={stats.openFlagsCount > 0 ? 'Requires Action' : 'All Clear'}
           badgeVariant={stats.openFlagsCount > 0 ? 'open' : 'resolved'}
         />
       </div>
@@ -286,7 +300,7 @@ export function Dashboard() {
           <div className="p-8">
             <EmptyState
               title="No payments received today"
-              description="When payments are verified, they will automatically appear here with exact shop details and timestamps."
+              description="When customer payment proofs are verified by the accounts manager, they will appear here with timestamps."
               icon={Receipt}
               action={
                 <Link
@@ -350,7 +364,7 @@ export function Dashboard() {
                       </div>
                     </td>
                     <td className="px-6 py-4 text-center">
-                      <Badge variant="verified">Verified</Badge>
+                      <Badge variant="verified" />
                     </td>
                     <td className="px-6 py-4 text-right">
                       <Link

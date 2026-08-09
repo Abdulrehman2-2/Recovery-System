@@ -16,6 +16,7 @@ export function NotificationProvider({ children }) {
   const fetchNotifications = useCallback(async () => {
     try {
       setLoading(true);
+
       // 1. Fetch open flags
       const { data: openFlags, error: flagsError } = await supabase
         .from('flags')
@@ -45,10 +46,10 @@ export function NotificationProvider({ children }) {
         .order('created_at', { ascending: false });
 
       if (flagsError) {
-        console.warn('Error fetching flag notifications:', flagsError.message);
+        console.warn('Notice while fetching flag notifications:', flagsError.message);
       }
       if (paymentsError) {
-        console.warn('Error fetching payment notifications:', paymentsError.message);
+        console.warn('Notice while fetching payment notifications:', paymentsError.message);
       }
 
       // Collect customer IDs needed to display shop names
@@ -76,15 +77,15 @@ export function NotificationProvider({ children }) {
 
       const items = [];
 
-      // Add Red Notifications (Flags)
+      // Add Red Notifications (Open Flags)
       if (openFlags) {
         openFlags.forEach((flag) => {
           const cust = customerMap[flag.customer_id];
-          const shopName = cust?.shop_name || 'Unknown Shop';
+          const shopName = cust?.shop_name || `Customer #${flag.customer_id}`;
           items.push({
             id: `flag-${flag.id}`,
             type: 'flag', // Red
-            title: `[URGENT] ${flag.reason || 'Flag raised'}`,
+            title: `[URGENT] ${flag.reason || 'Account flag raised'}`,
             subtitle: shopName,
             customerId: flag.customer_id,
             timestamp: flag.created_at,
@@ -93,17 +94,17 @@ export function NotificationProvider({ children }) {
         });
       }
 
-      // Add Green Notifications (Pending Payments)
+      // Add Green Notifications (Pending Payment Proofs)
       if (pendingPayments) {
         pendingPayments.forEach((payment) => {
           const cust = customerMap[payment.customer_id];
-          const shopName = cust?.shop_name || 'Unknown Shop';
+          const shopName = cust?.shop_name || `Customer #${payment.customer_id}`;
           const formattedAmount = formatCurrency(payment.amount);
           items.push({
             id: `payment-${payment.id}`,
             type: 'payment', // Green
             title: `New payment proof from ${shopName} — ${formattedAmount}`,
-            subtitle: `Submitted at ${payment.submitted_at ? new Date(payment.submitted_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Recently'}`,
+            subtitle: `Submitted on ${payment.submitted_at ? new Date(payment.submitted_at).toLocaleDateString([], { day: '2-digit', month: 'short' }) : 'Recently'}`,
             customerId: payment.customer_id,
             timestamp: payment.submitted_at || payment.created_at,
             raw: payment,
@@ -111,7 +112,7 @@ export function NotificationProvider({ children }) {
         });
       }
 
-      // Sort by newest timestamp
+      // Sort newest first
       items.sort((a, b) => new Date(b.timestamp || 0) - new Date(a.timestamp || 0));
       setNotifications(items);
     } catch (err) {
@@ -129,9 +130,9 @@ export function NotificationProvider({ children }) {
       fetchNotifications();
     }, 30000);
 
-    // Supabase Realtime listener for live updates
+    // Supabase Realtime channel for live instant notifications
     const channel = supabase
-      .channel('paymate-notifications')
+      .channel('paymate-notifications-channel')
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'flags' },
